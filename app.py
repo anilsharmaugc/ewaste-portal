@@ -52,7 +52,6 @@ TELEGRAM_BOT_TOKEN = "8236825484:AAFTAQFvRJUGfM2OZP0UlPrwo4Yvz2KdM68"
 def send_telegram_alert(lead_id, name, phone, category, condition):
     """Automatically detects your Chat ID from t.me/BVB_EWaste_bot and sends an instant push notification."""
     try:
-        # Automatically fetch the chat ID of anyone who messaged the bot
         updates_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
         response = requests.get(updates_url, timeout=5).json()
         
@@ -76,23 +75,61 @@ def send_telegram_alert(lead_id, name, phone, category, condition):
                 "parse_mode": "Markdown"
             }
             requests.post(send_url, json=payload, timeout=5)
-        else:
-            print("Telegram Notice: Please send at least one message (e.g., 'Hi') to @BVB_EWaste_bot on Telegram first.")
     except Exception as e:
         print(f"Telegram notification error: {e}")
 
-# Pre-configured MySQL Password
-DB_PASSWORD = "sa"
+# --- DATABASE CONNECTION HANDLER ---
+def get_db_connection(password=None):
+    """Establishes connection to Aiven Cloud MySQL (production) or local MySQL (development)."""
+    if "mysql" in st.secrets:
+        return mysql.connector.connect(
+            host=st.secrets["mysql"]["host"],
+            port=int(st.secrets["mysql"]["port"]),
+            user=st.secrets["mysql"]["user"],
+            password=st.secrets["mysql"]["password"],
+            database=st.secrets["mysql"]["database"],
+            charset="utf8",
+            ssl_disabled=False
+        )
+    else:
+        pwd = password if password else "sa"
+        return mysql.connector.connect(
+            host="localhost",
+            user="root",
+            password=pwd,
+            database="ewaste_db",
+            charset="utf8"
+        )
 
-def get_db_connection(password):
-    """Establishes connection to MySQL database with explicit UTF8 charset."""
-    return mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password=password,
-        database="ewaste_db",
-        charset="utf8"
-    )
+# --- AUTOMATIC TABLE CREATION ON STARTUP ---
+def init_db():
+    """Automatically creates the database table if it doesn't already exist."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS ewaste_leads (
+                lead_id INT AUTO_INCREMENT PRIMARY KEY,
+                full_name VARCHAR(255) NOT NULL,
+                phone VARCHAR(50) NOT NULL,
+                email VARCHAR(255),
+                address TEXT NOT NULL,
+                pincode VARCHAR(20) NOT NULL,
+                item_category VARCHAR(100) NOT NULL,
+                item_details TEXT NOT NULL,
+                item_condition VARCHAR(100) NOT NULL,
+                status VARCHAR(50) DEFAULT 'Pending',
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        """)
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"Table Init Notice: {e}")
+
+# Run table initialization automatically
+init_db()
 
 # --- NAVIGATION TABS ---
 tab_home, tab_form, tab_admin = st.tabs(["🏠 Home / Overview", "📝 Deposit E-Waste", "🛠️ Admin Portal"])
@@ -178,7 +215,7 @@ with tab_form:
             st.error("Please fill in all mandatory fields marked with an asterisk (*).")
         else:
             try:
-                conn = get_db_connection(DB_PASSWORD)
+                conn = get_db_connection()
                 cursor = conn.cursor()
                 
                 query = """
@@ -195,7 +232,7 @@ with tab_form:
                 cursor.close()
                 conn.close()
                 
-                # Trigger Direct Telegram Push Notification with Auto-Discovery
+                # Trigger Direct Telegram Push Notification
                 send_telegram_alert(lead_id, full_name, phone, item_category, item_condition)
                 
                 st.success(f"🎉 Deposit Request Submitted Successfully! Your Tracking ID is **#EW-{lead_id}**.")
