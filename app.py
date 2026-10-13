@@ -78,21 +78,31 @@ def send_telegram_alert(lead_id, name, phone, category, condition):
     except Exception as e:
         print(f"Telegram notification error: {e}")
 
-# --- DATABASE CONNECTION HANDLER (AIVEN CLOUD) ---
+# --- DATABASE CONNECTION HANDLER (SECURE STREAMLIT SECRETS) ---
 def get_db_connection():
-    """Establishes a secure connection to Aiven Cloud MySQL database[cite: 5]."""
+    """Establishes a secure connection to Aiven Cloud MySQL using Streamlit Secrets."""
     try:
-        return mysql.connector.connect(
-            host="mysql-29d3a044-bvbewaste.g.aivencloud.com",
-            port=17843,
-            user="avnadmin",
-            password="AVNS_Mf6YK2IK-RDDE7aaeMK",
-            database="defaultdb",
-            charset="utf8",
-            ssl_disabled=False
-        )
+        if "mysql" in st.secrets:
+            return mysql.connector.connect(
+                host=st.secrets["mysql"]["host"],
+                port=int(st.secrets["mysql"]["port"]),
+                user=st.secrets["mysql"]["user"],
+                password=st.secrets["mysql"]["password"],
+                database=st.secrets["mysql"]["database"],
+                charset="utf8",
+                ssl_disabled=False
+            )
+        else:
+            # Fallback for local testing if needed
+            return mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password="sa",
+                database="ewaste_db",
+                charset="utf8"
+            )
     except mysql.connector.Error as err:
-        st.error(f"🚨 Aiven Cloud Database Connection Error: {err}")
+        st.error(f"🚨 Database Connection Error: {err}")
         raise err
 
 # --- AUTOMATIC TABLE CREATION ON STARTUP ---
@@ -307,4 +317,4 @@ with tab_admin:
 
     except mysql.connector.Error as err:
         st.error(f"❌ Cloud Database Connection Error: {err}")
-        st.info("Please check your Aiven credentials.")
+        st.info("Please check your Aiven credentials in Streamlit Secrets.")
