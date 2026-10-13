@@ -81,25 +81,29 @@ def send_telegram_alert(lead_id, name, phone, category, condition):
 # --- DATABASE CONNECTION HANDLER ---
 def get_db_connection(password=None):
     """Establishes connection to Aiven Cloud MySQL (production) or local MySQL (development)."""
-    if "mysql" in st.secrets:
-        return mysql.connector.connect(
-            host=st.secrets["mysql"]["host"],
-            port=int(st.secrets["mysql"]["port"]),
-            user=st.secrets["mysql"]["user"],
-            password=st.secrets["mysql"]["password"],
-            database=st.secrets["mysql"]["database"],
-            charset="utf8",
-            ssl_disabled=False
-        )
-    else:
-        pwd = password if password else "sa"
-        return mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password=pwd,
-            database="ewaste_db",
-            charset="utf8"
-        )
+    try:
+        if "mysql" in st.secrets:
+            return mysql.connector.connect(
+                host=st.secrets["mysql"]["host"],
+                port=int(st.secrets["mysql"]["port"]),
+                user=st.secrets["mysql"]["user"],
+                password=st.secrets["mysql"]["password"],
+                database=st.secrets["mysql"]["database"],
+                charset="utf8",
+                ssl_disabled=False
+            )
+        else:
+            pwd = password if password else "sa"
+            return mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password=pwd,
+                database="ewaste_db",
+                charset="utf8"
+            )
+    except mysql.connector.Error as err:
+        st.error(f"🚨 Database Connection Error: {err}")
+        raise err
 
 # --- AUTOMATIC TABLE CREATION ON STARTUP ---
 def init_db():
@@ -242,79 +246,75 @@ with tab_form:
                 st.error(f"Database Error: {err}")
 
 # ==========================================
-# TAB 3: ADMIN DASHBOARD (PASSWORD PROTECTED)
+# TAB 3: ADMIN DASHBOARD (CLOUD SECURE)
 # ==========================================
 with tab_admin:
     st.header("🔐 Admin Portal & Lead Management")
-    st.write("Enter your MySQL password to view, manage, and authorize collection leads.")
+    st.write("Manage and authorize incoming e-waste collection leads stored in your cloud database.")
 
-    admin_password = st.text_input("Enter MySQL Password:", type="password", key="admin_pwd_input")
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        cursor.execute("SELECT * FROM ewaste_leads ORDER BY timestamp DESC")
+        leads = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
 
-    if not admin_password:
-        st.warning("⚠️ Please enter your password above to unlock the admin dashboard.")
-    else:
-        try:
-            conn = get_db_connection(admin_password)
-            cursor = conn.cursor(dictionary=True)
+        st.success("✅ Secure Cloud Database Connected: Admin Dashboard Unlocked")
+        
+        if not leads:
+            st.info("No deposit leads found in the database yet.")
+        else:
+            st.metric("Total Deposit Leads", len(leads))
             
-            cursor.execute("SELECT * FROM ewaste_leads ORDER BY timestamp DESC")
-            leads = cursor.fetchall()
-            
-            cursor.close()
-            conn.close()
+            for lead in leads:
+                with st.expander(f"Lead #EW-{lead['lead_id']} | {lead['full_name']} ({lead['item_category']}) - [{lead['status']}]"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write(f"**Phone:** {lead['phone']}")
+                        st.write(f"**Email:** {lead['email'] if lead['email'] else 'N/A'}")
+                        st.write(f"**Address:** {lead['address']} (PIN: {lead['pincode']})")
+                        st.write(f"**Submitted On:** {lead['timestamp']}")
+                    
+                    with col2:
+                        st.write(f"**Category:** {lead['item_category']}")
+                        st.write(f"**Description:** {lead['item_details']}")
+                        st.write(f"**Condition:** {lead['item_condition']}")
+                        st.write(f"**Current Status:** `{lead['status']}`")
 
-            st.success("✅ Authentication Successful: Admin Dashboard Unlocked")
-            
-            if not leads:
-                st.info("No deposit leads found in the database yet.")
-            else:
-                st.metric("Total Deposit Leads", len(leads))
-                
-                for lead in leads:
-                    with st.expander(f"Lead #EW-{lead['lead_id']} | {lead['full_name']} ({lead['item_category']}) - [{lead['status']}]"):
-                        col1, col2 = st.columns(2)
-                        
-                        with col1:
-                            st.write(f"**Phone:** {lead['phone']}")
-                            st.write(f"**Email:** {lead['email'] if lead['email'] else 'N/A'}")
-                            st.write(f"**Address:** {lead['address']} (PIN: {lead['pincode']})")
-                            st.write(f"**Submitted On:** {lead['timestamp']}")
-                        
-                        with col2:
-                            st.write(f"**Category:** {lead['item_category']}")
-                            st.write(f"**Description:** {lead['item_details']}")
-                            st.write(f"**Condition:** {lead['item_condition']}")
-                            st.write(f"**Current Status:** `{lead['status']}`")
+                    st.markdown("---")
+                    
+                    btn_col1, btn_col2, btn_col3 = st.columns(3)
+                    
+                    with btn_col1:
+                        whatsapp_url = f"https://wa.me/{lead['phone']}?text=Hi%20{lead['full_name']},%20regarding%20your%20e-waste%20deposit%20request%20%23EW-{lead['lead_id']}..."
+                        st.markdown(f"[💬 Chat on WhatsApp]({whatsapp_url})", unsafe_allow_html=True)
+                    
+                    with btn_col2:
+                        new_status = st.selectbox(
+                            "Update Status", 
+                            ["Pending", "Scheduled", "Collected", "Approved"], 
+                            index=["Pending", "Scheduled", "Collected", "Approved"].index(lead['status']),
+                            key=f"status_{lead['lead_id']}"
+                        )
+                    
+                    with btn_col3:
+                        if st.button("Save Status", key=f"save_{lead['lead_id']}"):
+                            try:
+                                conn = get_db_connection()
+                                cursor = conn.cursor()
+                                cursor.execute("UPDATE ewaste_leads SET status = %s WHERE lead_id = %s", (new_status, lead['lead_id']))
+                                conn.commit()
+                                cursor.close()
+                                conn.close()
+                                st.success(f"Status updated to {new_status}!")
+                                st.rerun()
+                            except mysql.connector.Error as err:
+                                st.error(f"Error updating: {err}")
 
-                        st.markdown("---")
-                        
-                        btn_col1, btn_col2, btn_col3 = st.columns(3)
-                        
-                        with btn_col1:
-                            whatsapp_url = f"https://wa.me/{lead['phone']}?text=Hi%20{lead['full_name']},%20regarding%20your%20e-waste%20deposit%20request%20%23EW-{lead['lead_id']}..."
-                            st.markdown(f"[💬 Chat on WhatsApp]({whatsapp_url})", unsafe_allow_html=True)
-                        
-                        with btn_col2:
-                            new_status = st.selectbox(
-                                "Update Status", 
-                                ["Pending", "Scheduled", "Collected", "Approved"], 
-                                index=["Pending", "Scheduled", "Collected", "Approved"].index(lead['status']),
-                                key=f"status_{lead['lead_id']}"
-                            )
-                        
-                        with btn_col3:
-                            if st.button("Save Status", key=f"save_{lead['lead_id']}"):
-                                try:
-                                    conn = get_db_connection(admin_password)
-                                    cursor = conn.cursor()
-                                    cursor.execute("UPDATE ewaste_leads SET status = %s WHERE lead_id = %s", (new_status, lead['lead_id']))
-                                    conn.commit()
-                                    cursor.close()
-                                    conn.close()
-                                    st.success(f"Status updated to {new_status}!")
-                                    st.rerun()
-                                except mysql.connector.Error as err:
-                                    st.error(f"Error updating: {err}")
-
-        except mysql.connector.Error as err:
-            st.error("❌ Incorrect MySQL password or connection error. Please try again.")
+    except mysql.connector.Error as err:
+        st.error(f"❌ Cloud Database Connection Error: {err}")
+        st.info("Please check your Aiven credentials in Streamlit Secrets.")
